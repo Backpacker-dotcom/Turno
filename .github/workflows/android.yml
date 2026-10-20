@@ -111,18 +111,18 @@ jobs:
           cat > $A/app/src/main/res/values/styles.xml <<'EOF'
           <resources>
               <style name="AppTheme" parent="android:Theme.Material.NoActionBar">
-                  <item name="android:statusBarColor">#161514</item>
-                  <item name="android:navigationBarColor">#161514</item>
-                  <item name="android:windowBackground">#161514</item>
+                  <item name="android:statusBarColor">#1A1918</item>
+                  <item name="android:navigationBarColor">#1A1918</item>
+                  <item name="android:windowBackground">#1A1918</item>
               </style>
           </resources>
           EOF
           cat > $A/app/src/main/res/drawable/ic_launcher.xml <<'EOF'
           <vector xmlns:android="http://schemas.android.com/apk/res/android"
               android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
-              <path android:fillColor="#161514" android:pathData="M0,0h108v108h-108z"/>
-              <path android:fillColor="#EC3013" android:pathData="M18,18h72v72h-72z"/>
-              <path android:fillColor="#F3F2F2" android:pathData="M32,34h44v11h-16.5v31h-11v-31h-16.5z"/>
+              <path android:fillColor="#1A1918" android:pathData="M0,0h108v108h-108z"/>
+              <path android:fillColor="#E0583F" android:pathData="M18,18h72v72h-72z"/>
+              <path android:fillColor="#E8E4DF" android:pathData="M32,34h44v11h-16.5v31h-11v-31h-16.5z"/>
           </vector>
           EOF
           cat > $A/app/src/main/res/drawable/ic_notify.xml <<'EOF'
@@ -227,7 +227,7 @@ jobs:
               protected void onCreate(Bundle savedInstanceState) {
                   super.onCreate(savedInstanceState);
                   web = new WebView(this);
-                  web.setBackgroundColor(0xFF161514);
+                  web.setBackgroundColor(0xFF1A1918);
                   setContentView(web);
                   WebSettings s = web.getSettings();
                   s.setJavaScriptEnabled(true);
@@ -634,7 +634,7 @@ jobs:
                                   .setContentTitle(o.optString("title"))
                                   .setContentText(body)
                                   .setStyle(new Notification.BigTextStyle().bigText(body))
-                                  .setColor(0xFFEC3013)
+                                  .setColor(0xFFE0583F)
                                   .setAutoCancel(true)
                                   .setContentIntent(cpi);
                           nm.notify(id.hashCode(), b.build());
