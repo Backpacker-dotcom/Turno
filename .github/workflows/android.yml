@@ -1,0 +1,684 @@
+name: APK oluştur
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/android.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v5
+        with:
+          gradle-version: "8.10.2"
+      - name: Android projesini hazırla
+        run: |
+          set -e
+          A=build-android
+          J=$A/app/src/main/java/com/backpacker/turno
+          mkdir -p $A/app/src/main/assets $J $A/app/src/main/java/android/print $A/app/src/main/res/values $A/app/src/main/res/drawable
+          cp index.html $A/app/src/main/assets/index.html
+          cat > $A/settings.gradle <<'EOF'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositories { google(); mavenCentral() } }
+          rootProject.name = "Turno"
+          include ':app'
+          EOF
+          cat > $A/build.gradle <<'EOF'
+          plugins { id 'com.android.application' version '8.5.2' apply false }
+          EOF
+          cat > $A/gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2048m
+          android.useAndroidX=false
+          android.nonTransitiveRClass=true
+          EOF
+          cat > $A/app/build.gradle <<'EOF'
+          plugins { id 'com.android.application' }
+          def runNo = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInteger()
+          android {
+              namespace 'com.backpacker.turno'
+              compileSdk 34
+              defaultConfig {
+                  applicationId 'com.backpacker.turno'
+                  minSdk 24
+                  targetSdk 34
+                  versionCode runNo
+                  versionName "1.0." + runNo
+              }
+              signingConfigs {
+                  release {
+                      storeFile file(System.getenv("SIGNING_KEYSTORE"))
+                      storeType 'PKCS12'
+                      storePassword 'turnoapp'
+                      keyAlias 'turno'
+                      keyPassword 'turnoapp'
+                  }
+              }
+              buildTypes { release { minifyEnabled false; signingConfig signingConfigs.release } }
+              compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+              lint { abortOnError false; checkReleaseBuilds false }
+          }
+          EOF
+          cat > $A/app/src/main/AndroidManifest.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+              <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+              <application
+                  android:label="Turno"
+                  android:icon="@drawable/ic_launcher"
+                  android:roundIcon="@drawable/ic_launcher"
+                  android:allowBackup="true"
+                  android:theme="@style/AppTheme">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:launchMode="singleTask"
+                      android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode"
+                      android:windowSoftInputMode="adjustResize">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+                  <provider
+                      android:name=".Files"
+                      android:authorities="com.backpacker.turno.files"
+                      android:exported="false"
+                      android:grantUriPermissions="true" />
+                  <receiver android:name=".ReminderReceiver" android:exported="false">
+                      <intent-filter>
+                          <action android:name="android.intent.action.BOOT_COMPLETED" />
+                          <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                      </intent-filter>
+                  </receiver>
+              </application>
+          </manifest>
+          EOF
+          cat > $A/app/src/main/res/values/styles.xml <<'EOF'
+          <resources>
+              <style name="AppTheme" parent="android:Theme.Material.NoActionBar">
+                  <item name="android:statusBarColor">#161514</item>
+                  <item name="android:navigationBarColor">#161514</item>
+                  <item name="android:windowBackground">#161514</item>
+              </style>
+          </resources>
+          EOF
+          cat > $A/app/src/main/res/drawable/ic_launcher.xml <<'EOF'
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+              <path android:fillColor="#161514" android:pathData="M0,0h108v108h-108z"/>
+              <path android:fillColor="#EC3013" android:pathData="M18,18h72v72h-72z"/>
+              <path android:fillColor="#F3F2F2" android:pathData="M32,34h44v11h-16.5v31h-11v-31h-16.5z"/>
+          </vector>
+          EOF
+          cat > $A/app/src/main/res/drawable/ic_notify.xml <<'EOF'
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">
+              <path android:fillColor="#FFFFFFFF" android:pathData="M4,4h16v4h-6v12h-4v-12h-6z"/>
+          </vector>
+          EOF
+          cat > $A/app/src/main/java/android/print/PdfWriter.java <<'EOF'
+          package android.print;
+
+          import android.os.CancellationSignal;
+          import android.os.ParcelFileDescriptor;
+          import java.io.File;
+
+          public class PdfWriter {
+              public interface Done { void ok(File f); void fail(); }
+
+              public static void write(final PrintDocumentAdapter ad, final PrintAttributes attrs, final File f, final Done cb) {
+                  ad.onStart();
+                  ad.onLayout(null, attrs, null, new PrintDocumentAdapter.LayoutResultCallback() {
+                      @Override
+                      public void onLayoutFinished(PrintDocumentInfo info, boolean changed) {
+                          try {
+                              final ParcelFileDescriptor pfd = ParcelFileDescriptor.open(f, ParcelFileDescriptor.MODE_CREATE | ParcelFileDescriptor.MODE_TRUNCATE | ParcelFileDescriptor.MODE_READ_WRITE);
+                              ad.onWrite(new PageRange[]{PageRange.ALL_PAGES}, pfd, new CancellationSignal(), new PrintDocumentAdapter.WriteResultCallback() {
+                                  @Override
+                                  public void onWriteFinished(PageRange[] pages) {
+                                      try { pfd.close(); } catch (Exception ignored) { }
+                                      ad.onFinish();
+                                      cb.ok(f);
+                                  }
+                                  @Override
+                                  public void onWriteFailed(CharSequence error) {
+                                      try { pfd.close(); } catch (Exception ignored) { }
+                                      cb.fail();
+                                  }
+                              });
+                          } catch (Exception e) { cb.fail(); }
+                      }
+                      @Override
+                      public void onLayoutFailed(CharSequence error) { cb.fail(); }
+                  }, null);
+              }
+          }
+          EOF
+          cat > $J/MainActivity.java <<'EOF'
+          package com.backpacker.turno;
+
+          import android.app.Activity;
+          import android.content.ClipData;
+          import android.content.Intent;
+          import android.net.Uri;
+          import android.os.Bundle;
+          import android.print.PdfWriter;
+          import android.print.PrintAttributes;
+          import android.print.PrintManager;
+          import android.text.TextUtils;
+          import android.webkit.ValueCallback;
+          import android.webkit.WebChromeClient;
+          import android.webkit.WebResourceRequest;
+          import android.webkit.WebResourceResponse;
+          import android.webkit.WebSettings;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+
+          import java.io.ByteArrayInputStream;
+          import java.io.ByteArrayOutputStream;
+          import java.io.File;
+          import java.io.FileInputStream;
+          import java.io.FileOutputStream;
+          import java.io.InputStream;
+          import java.io.OutputStream;
+          import java.net.HttpURLConnection;
+          import java.net.URL;
+          import java.nio.charset.StandardCharsets;
+          import java.util.HashMap;
+
+          public class MainActivity extends Activity {
+              static final String HOST = "turno.local";
+              static final String START = "https://" + HOST + "/index.html";
+              static final String[] REMOTE = {
+                      "https://raw.githubusercontent.com/Backpacker-dotcom/Turno/main/index.html",
+                      "https://cdn.jsdelivr.net/gh/Backpacker-dotcom/Turno@main/index.html"
+              };
+              static final int REQ_FILE = 41, REQ_EXPORT = 43;
+              WebView web, printView;
+              byte[] pendingExport;
+              private ValueCallback<Uri[]> fileCb;
+
+              interface PrintReady { void ready(WebView v); }
+
+              void js(final String code) {
+                  runOnUiThread(() -> { if (web != null) web.evaluateJavascript(code, null); });
+              }
+
+              void toast(String msg) {
+                  js("window.onNativeToast&&window.onNativeToast(" + org.json.JSONObject.quote(msg) + ")");
+              }
+
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  web = new WebView(this);
+                  web.setBackgroundColor(0xFF161514);
+                  setContentView(web);
+                  WebSettings s = web.getSettings();
+                  s.setJavaScriptEnabled(true);
+                  s.setDomStorageEnabled(true);
+                  s.setDatabaseEnabled(true);
+                  s.setAllowFileAccess(false);
+                  s.setTextZoom(100);
+                  web.addJavascriptInterface(new Bridge(this), "Android");
+                  web.setWebChromeClient(new WebChromeClient() {
+                      @Override
+                      public boolean onShowFileChooser(WebView v, ValueCallback<Uri[]> cb, FileChooserParams p) {
+                          if (fileCb != null) fileCb.onReceiveValue(null);
+                          fileCb = cb;
+                          try {
+                              String acc = TextUtils.join(",", p.getAcceptTypes()).toLowerCase();
+                              Intent i = new Intent(Intent.ACTION_GET_CONTENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*");
+                              if (acc.contains("spreadsheet") || acc.contains("xlsx")) i.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{
+                                      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/vnd.ms-excel", "application/octet-stream", "application/zip"});
+                              startActivityForResult(Intent.createChooser(i, "Dosya seç"), REQ_FILE);
+                          } catch (Exception e) {
+                              fileCb = null;
+                              toast("Dosya seçici açılamadı");
+                              return false;
+                          }
+                          return true;
+                      }
+                  });
+                  web.setWebViewClient(new WebViewClient() {
+                      @Override
+                      public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest req) {
+                          Uri u = req.getUrl();
+                          if (!HOST.equals(u.getHost())) return null;
+                          String path = u.getPath() == null ? "/" : u.getPath();
+                          if (path.equals("/") || path.equals("/index.html")) {
+                              WebResourceResponse r = new WebResourceResponse("text/html", "utf-8", openPage());
+                              HashMap<String, String> h = new HashMap<>();
+                              h.put("Cache-Control", "no-store");
+                              r.setResponseHeaders(h);
+                              return r;
+                          }
+                          return new WebResourceResponse("text/plain", "utf-8", 404, "Not Found",
+                                  new HashMap<String, String>(), new ByteArrayInputStream(new byte[0]));
+                      }
+
+                      @Override
+                      public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest req) {
+                          Uri u = req.getUrl();
+                          if (HOST.equals(u.getHost())) return false;
+                          try { startActivity(new Intent(Intent.ACTION_VIEW, u)); } catch (Exception ignored) { }
+                          return true;
+                      }
+                  });
+                  web.loadUrl(START);
+                  Reminder.schedule(this);
+                  new Thread(this::fetchUpdate).start();
+              }
+
+              @Override
+              protected void onActivityResult(int req, int res, Intent data) {
+                  super.onActivityResult(req, res, data);
+                  if (req == REQ_FILE) {
+                      if (fileCb == null) return;
+                      Uri[] r = null;
+                      if (res == RESULT_OK && data != null && data.getData() != null) r = new Uri[]{data.getData()};
+                      fileCb.onReceiveValue(r);
+                      fileCb = null;
+                  } else if (req == REQ_EXPORT) {
+                      boolean ok = false;
+                      if (res == RESULT_OK && data != null && data.getData() != null && pendingExport != null) {
+                          try (OutputStream o = getContentResolver().openOutputStream(data.getData())) { o.write(pendingExport); ok = true; } catch (Exception ignored) { }
+                      }
+                      pendingExport = null;
+                      js("window.onNativeExport&&window.onNativeExport(" + ok + ")");
+                  }
+              }
+
+              @Override
+              public void onRequestPermissionsResult(int req, String[] perms, int[] res) {
+                  super.onRequestPermissionsResult(req, perms, res);
+                  js("window.onNativeNotif&&window.onNativeNotif()");
+              }
+
+              void withPrintView(final String html, final PrintReady cb) {
+                  runOnUiThread(() -> {
+                      WebView v = new WebView(MainActivity.this);
+                      printView = v;
+                      v.setWebViewClient(new WebViewClient() {
+                          boolean done = false;
+                          @Override
+                          public void onPageFinished(WebView view, String url) {
+                              if (done) return;
+                              done = true;
+                              view.postDelayed(() -> cb.ready(view), 350);
+                          }
+                      });
+                      v.loadDataWithBaseURL("https://print.local/", html, "text/html", "utf-8", null);
+                  });
+              }
+
+              PrintAttributes a4() {
+                  return new PrintAttributes.Builder()
+                          .setMediaSize(PrintAttributes.MediaSize.ISO_A4.asLandscape())
+                          .setResolution(new PrintAttributes.Resolution("pdf", "pdf", 300, 300))
+                          .setColorMode(PrintAttributes.COLOR_MODE_COLOR)
+                          .setMinMargins(PrintAttributes.Margins.NO_MARGINS)
+                          .build();
+              }
+
+              void printHtml(final String name, String html) {
+                  withPrintView(html, v -> {
+                      try {
+                          PrintManager pm = (PrintManager) getSystemService(PRINT_SERVICE);
+                          pm.print(name, v.createPrintDocumentAdapter(name), a4());
+                      } catch (Exception e) { toast("Yazdırma açılamadı"); }
+                  });
+              }
+
+              void sharePdf(final String name, String html, final String text) {
+                  withPrintView(html, v -> {
+                      try {
+                          File dir = new File(getCacheDir(), "share");
+                          dir.mkdirs();
+                          File f = new File(dir, name.replaceAll("[\\\\/:*?\"<>|]", "_"));
+                          PdfWriter.write(v.createPrintDocumentAdapter(name), a4(), f, new PdfWriter.Done() {
+                              public void ok(File out) { runOnUiThread(() -> shareUri(Files.uriFor(MainActivity.this, out), "application/pdf", text)); }
+                              public void fail() { toast("PDF oluşturulamadı"); }
+                          });
+                      } catch (Exception e) { toast("PDF oluşturulamadı"); }
+                  });
+              }
+
+              void shareUri(Uri u, String mime, String text) {
+                  Intent i = new Intent(Intent.ACTION_SEND).setType(mime);
+                  i.putExtra(Intent.EXTRA_STREAM, u);
+                  if (text != null) i.putExtra(Intent.EXTRA_TEXT, text);
+                  i.setClipData(ClipData.newRawUri("", u));
+                  i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                  Intent wa = new Intent(i).setPackage("com.whatsapp");
+                  try { startActivity(wa); }
+                  catch (Exception e) {
+                      try { startActivity(Intent.createChooser(i, "Paylaş")); } catch (Exception x) { toast("Paylaşılamadı"); }
+                  }
+              }
+
+              private InputStream openPage() {
+                  try {
+                      File f = new File(getFilesDir(), "index.html");
+                      if (f.exists() && f.length() > 50000) return new FileInputStream(f);
+                      return getAssets().open("index.html");
+                  } catch (Exception e) {
+                      return new ByteArrayInputStream("<p style=\"color:#fff;font-family:sans-serif;padding:24px\">Sayfa açılamadı.</p>".getBytes(StandardCharsets.UTF_8));
+                  }
+              }
+
+              private void fetchUpdate() {
+                  for (String src : REMOTE) {
+                      try {
+                          HttpURLConnection c = (HttpURLConnection) new URL(src + "?t=" + System.currentTimeMillis()).openConnection();
+                          c.setConnectTimeout(10000);
+                          c.setReadTimeout(30000);
+                          c.setUseCaches(false);
+                          if (c.getResponseCode() != 200) { c.disconnect(); continue; }
+                          InputStream in = c.getInputStream();
+                          ByteArrayOutputStream out = new ByteArrayOutputStream();
+                          byte[] buf = new byte[16384];
+                          int n;
+                          while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+                          in.close();
+                          c.disconnect();
+                          byte[] data = out.toByteArray();
+                          String txt = new String(data, StandardCharsets.UTF_8);
+                          if (data.length < 50000 || !txt.contains("<html") || !txt.contains("</script>")) continue;
+                          File tmp = new File(getFilesDir(), "index.tmp");
+                          FileOutputStream fo = new FileOutputStream(tmp);
+                          fo.write(data);
+                          fo.close();
+                          File dst = new File(getFilesDir(), "index.html");
+                          if (!tmp.renameTo(dst)) { dst.delete(); tmp.renameTo(dst); }
+                          return;
+                      } catch (Exception ignored) { }
+                  }
+              }
+
+              @Override
+              public void onBackPressed() {
+                  if (web == null) { super.onBackPressed(); return; }
+                  web.evaluateJavascript("!!(window.turnoBack&&window.turnoBack())", v -> {
+                      if (!"true".equals(v)) moveTaskToBack(true);
+                  });
+              }
+          }
+          EOF
+          cat > $J/Bridge.java <<'EOF'
+          package com.backpacker.turno;
+
+          import android.Manifest;
+          import android.app.NotificationManager;
+          import android.content.ClipData;
+          import android.content.ClipboardManager;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.content.pm.PackageManager;
+          import android.os.Build;
+          import android.webkit.JavascriptInterface;
+
+          import java.nio.charset.StandardCharsets;
+
+          public class Bridge {
+              private final MainActivity a;
+
+              Bridge(MainActivity a) { this.a = a; }
+
+              @JavascriptInterface
+              public void copy(final String text) {
+                  a.runOnUiThread(() -> {
+                      ClipboardManager cm = (ClipboardManager) a.getSystemService(Context.CLIPBOARD_SERVICE);
+                      if (cm != null) cm.setPrimaryClip(ClipData.newPlainText("Turno", text));
+                  });
+              }
+
+              @JavascriptInterface
+              public void shareText(final String text) {
+                  a.runOnUiThread(() -> {
+                      Intent i = new Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text);
+                      try { a.startActivity(Intent.createChooser(i, "Paylaş")); } catch (Exception e) { a.toast("Paylaşılamadı"); }
+                  });
+              }
+
+              @JavascriptInterface
+              public void setReminders(String json) {
+                  Reminder.prefs(a).edit().putString("items", json == null ? "[]" : json).apply();
+                  Reminder.check(a);
+                  Reminder.schedule(a);
+              }
+
+              @JavascriptInterface
+              public boolean notificationsAllowed() {
+                  if (Build.VERSION.SDK_INT >= 33 && a.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return false;
+                  NotificationManager nm = (NotificationManager) a.getSystemService(Context.NOTIFICATION_SERVICE);
+                  return nm == null || nm.areNotificationsEnabled();
+              }
+
+              @JavascriptInterface
+              public void requestNotifications() {
+                  if (Build.VERSION.SDK_INT >= 33) a.runOnUiThread(() -> a.requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 7));
+                  else a.runOnUiThread(() -> {
+                      Intent i = new Intent("android.settings.APP_NOTIFICATION_SETTINGS").putExtra("android.provider.extra.APP_PACKAGE", a.getPackageName());
+                      try { a.startActivity(i); } catch (Exception ignored) { }
+                  });
+              }
+
+              @JavascriptInterface
+              public void exportText(final String name, final String mime, final String text) {
+                  a.runOnUiThread(() -> {
+                      a.pendingExport = text.getBytes(StandardCharsets.UTF_8);
+                      Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType(mime).putExtra(Intent.EXTRA_TITLE, name);
+                      try { a.startActivityForResult(i, MainActivity.REQ_EXPORT); }
+                      catch (Exception e) { a.pendingExport = null; a.js("window.onNativeExport&&window.onNativeExport(false)"); }
+                  });
+              }
+
+              @JavascriptInterface
+              public void printHtml(String name, String html) { a.printHtml(name, html); }
+
+              @JavascriptInterface
+              public void sharePdf(String name, String html, String text) { a.sharePdf(name, html, text); }
+          }
+          EOF
+          cat > $J/Files.java <<'EOF'
+          package com.backpacker.turno;
+
+          import android.content.ContentProvider;
+          import android.content.ContentValues;
+          import android.content.Context;
+          import android.database.Cursor;
+          import android.database.MatrixCursor;
+          import android.net.Uri;
+          import android.os.ParcelFileDescriptor;
+          import android.provider.OpenableColumns;
+
+          import java.io.File;
+          import java.io.FileNotFoundException;
+
+          public class Files extends ContentProvider {
+              static final String AUTH = "com.backpacker.turno.files";
+
+              static Uri uriFor(Context c, File f) {
+                  String base = c.getCacheDir().getAbsolutePath();
+                  String rel = f.getAbsolutePath().substring(base.length() + 1);
+                  Uri.Builder b = new Uri.Builder().scheme("content").authority(AUTH);
+                  for (String s : rel.split("/")) b.appendPath(s);
+                  return b.build();
+              }
+
+              private File fileFor(Uri u) throws FileNotFoundException {
+                  File f = getContext().getCacheDir();
+                  for (String s : u.getPathSegments()) {
+                      if (s.equals("..") || s.equals(".")) throw new FileNotFoundException();
+                      f = new File(f, s);
+                  }
+                  return f;
+              }
+
+              @Override public boolean onCreate() { return true; }
+
+              @Override
+              public Cursor query(Uri uri, String[] projection, String selection, String[] args, String sort) {
+                  File f;
+                  try { f = fileFor(uri); } catch (Exception e) { return null; }
+                  MatrixCursor c = new MatrixCursor(new String[]{OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE});
+                  c.addRow(new Object[]{f.getName(), f.length()});
+                  return c;
+              }
+
+              @Override
+              public String getType(Uri uri) {
+                  String n = uri.getLastPathSegment();
+                  if (n == null) return "application/octet-stream";
+                  n = n.toLowerCase();
+                  if (n.endsWith(".pdf")) return "application/pdf";
+                  if (n.endsWith(".json")) return "application/json";
+                  return "application/octet-stream";
+              }
+
+              @Override
+              public ParcelFileDescriptor openFile(Uri uri, String mode) throws FileNotFoundException {
+                  File f = fileFor(uri);
+                  File p = f.getParentFile();
+                  if (p != null) p.mkdirs();
+                  return ParcelFileDescriptor.open(f, ParcelFileDescriptor.parseMode(mode));
+              }
+
+              @Override public Uri insert(Uri uri, ContentValues v) { return null; }
+              @Override public int delete(Uri uri, String s, String[] a) { return 0; }
+              @Override public int update(Uri uri, ContentValues v, String s, String[] a) { return 0; }
+          }
+          EOF
+          cat > $J/Reminder.java <<'EOF'
+          package com.backpacker.turno;
+
+          import android.app.AlarmManager;
+          import android.app.Notification;
+          import android.app.NotificationChannel;
+          import android.app.NotificationManager;
+          import android.app.PendingIntent;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.content.SharedPreferences;
+          import android.os.Build;
+
+          import org.json.JSONArray;
+          import org.json.JSONObject;
+
+          public class Reminder {
+              static final String CH = "turno";
+              static final String ACTION = "com.backpacker.turno.CHECK";
+
+              static SharedPreferences prefs(Context c) { return c.getSharedPreferences("turno", Context.MODE_PRIVATE); }
+
+              static PendingIntent pi(Context c) {
+                  Intent i = new Intent(c, ReminderReceiver.class).setAction(ACTION);
+                  return PendingIntent.getBroadcast(c, 1, i, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+              }
+
+              static void schedule(Context c) {
+                  AlarmManager am = (AlarmManager) c.getSystemService(Context.ALARM_SERVICE);
+                  if (am == null) return;
+                  long now = System.currentTimeMillis(), next = Long.MAX_VALUE;
+                  try {
+                      JSONArray arr = new JSONArray(prefs(c).getString("items", "[]"));
+                      JSONObject done = new JSONObject(prefs(c).getString("done", "{}"));
+                      for (int k = 0; k < arr.length(); k++) {
+                          JSONObject o = arr.getJSONObject(k);
+                          long at = o.optLong("at");
+                          if (done.has(o.optString("id"))) continue;
+                          if (at > now && at < next) next = at;
+                      }
+                  } catch (Exception ignored) { }
+                  am.cancel(pi(c));
+                  if (next != Long.MAX_VALUE) am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, next, pi(c));
+              }
+
+              static void check(Context c) {
+                  SharedPreferences p = prefs(c);
+                  NotificationManager nm = (NotificationManager) c.getSystemService(Context.NOTIFICATION_SERVICE);
+                  if (nm == null) return;
+                  if (Build.VERSION.SDK_INT >= 26) nm.createNotificationChannel(new NotificationChannel(CH, "Vardiya ve talepler", NotificationManager.IMPORTANCE_DEFAULT));
+                  long now = System.currentTimeMillis();
+                  try {
+                      JSONArray arr = new JSONArray(p.getString("items", "[]"));
+                      JSONObject done = new JSONObject(p.getString("done", "{}"));
+                      JSONObject keep = new JSONObject();
+                      Intent open = new Intent(c, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                      PendingIntent cpi = PendingIntent.getActivity(c, 2, open, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+                      for (int k = 0; k < arr.length(); k++) {
+                          JSONObject o = arr.getJSONObject(k);
+                          String id = o.optString("id");
+                          long at = o.optLong("at");
+                          if (done.has(id)) { keep.put(id, 1); continue; }
+                          if (at > now + 60000 || at < now - 6 * 3600000L) continue;
+                          String body = o.optString("body");
+                          Notification.Builder b = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(c, CH) : new Notification.Builder(c);
+                          b.setSmallIcon(R.drawable.ic_notify)
+                                  .setContentTitle(o.optString("title"))
+                                  .setContentText(body)
+                                  .setStyle(new Notification.BigTextStyle().bigText(body))
+                                  .setColor(0xFFEC3013)
+                                  .setAutoCancel(true)
+                                  .setContentIntent(cpi);
+                          nm.notify(id.hashCode(), b.build());
+                          keep.put(id, 1);
+                      }
+                      p.edit().putString("done", keep.toString()).apply();
+                  } catch (Exception ignored) { }
+              }
+          }
+          EOF
+          cat > $J/ReminderReceiver.java <<'EOF'
+          package com.backpacker.turno;
+
+          import android.content.BroadcastReceiver;
+          import android.content.Context;
+          import android.content.Intent;
+
+          public class ReminderReceiver extends BroadcastReceiver {
+              @Override
+              public void onReceive(Context c, Intent i) {
+                  Reminder.check(c);
+                  Reminder.schedule(c);
+              }
+          }
+          EOF
+      - name: İmza anahtarı
+        run: |
+          if [ ! -f release.keystore ]; then
+            keytool -genkeypair -keystore release.keystore -storetype PKCS12 -alias turno -keyalg RSA -keysize 2048 -validity 10000 -storepass turnoapp -keypass turnoapp -dname "CN=Turno, O=Backpacker, C=TR"
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add release.keystore
+            git commit -m "İmza anahtarı [skip ci]"
+            git push origin HEAD:main || true
+          fi
+          echo "SIGNING_KEYSTORE=$GITHUB_WORKSPACE/release.keystore" >> "$GITHUB_ENV"
+      - name: APK derle
+        working-directory: build-android
+        run: gradle --no-daemon assembleRelease
+      - run: cp build-android/app/build/outputs/apk/release/app-release.apk Turno.apk
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: Turno 1.0.${{ github.run_number }}
+          make_latest: true
+          files: Turno.apk
+          body: Telefona kurmak için Turno.apk dosyasını indir.
