@@ -77,6 +77,10 @@ jobs:
               <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
               <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
               <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+              <queries>
+                  <package android:name="com.whatsapp" />
+                  <package android:name="com.whatsapp.w4b" />
+              </queries>
               <application
                   android:label="Turno"
                   android:icon="@drawable/ic_launcher"
@@ -143,7 +147,7 @@ jobs:
 
               public static void write(final PrintDocumentAdapter ad, final PrintAttributes attrs, final File f, final Done cb) {
                   ad.onStart();
-                  ad.onLayout(null, attrs, null, new PrintDocumentAdapter.LayoutResultCallback() {
+                  ad.onLayout(null, attrs, new CancellationSignal(), new PrintDocumentAdapter.LayoutResultCallback() {
                       @Override
                       public void onLayoutFinished(PrintDocumentInfo info, boolean changed) {
                           try {
@@ -368,8 +372,24 @@ jobs:
                   Intent wa = new Intent(i).setPackage("com.whatsapp");
                   try { startActivity(wa); }
                   catch (Exception e) {
-                      try { startActivity(Intent.createChooser(i, "Paylaş")); } catch (Exception x) { toast("Paylaşılamadı"); }
+                      try { startActivity(new Intent(i).setPackage("com.whatsapp.w4b")); }
+                      catch (Exception e2) {
+                          try { startActivity(Intent.createChooser(i, "Paylaş")); } catch (Exception x) { toast("Paylaşılamadı"); }
+                      }
                   }
+              }
+
+              void sharePdfBytes(final String name, final String b64, final String text) {
+                  runOnUiThread(() -> {
+                      try {
+                          byte[] data = android.util.Base64.decode(b64, android.util.Base64.DEFAULT);
+                          File dir = new File(getCacheDir(), "share");
+                          dir.mkdirs();
+                          File f = new File(dir, name.replaceAll("[\\\\/:*?\"<>|]", "_"));
+                          try (FileOutputStream o = new FileOutputStream(f)) { o.write(data); }
+                          shareUri(Files.uriFor(MainActivity.this, f), "application/pdf", text);
+                      } catch (Exception e) { toast("PDF paylaşılamadı"); }
+                  });
               }
 
               private InputStream openPage() {
@@ -494,6 +514,20 @@ jobs:
 
               @JavascriptInterface
               public void sharePdf(String name, String html, String text) { a.sharePdf(name, html, text); }
+
+              @JavascriptInterface
+              public void sharePdfB64(String name, String b64, String text) { a.sharePdfBytes(name, b64, text); }
+
+              @JavascriptInterface
+              public void savePdfB64(final String name, final String b64) {
+                  a.runOnUiThread(() -> {
+                      try { a.pendingExport = android.util.Base64.decode(b64, android.util.Base64.DEFAULT); }
+                      catch (Exception e) { a.toast("PDF oluşturulamadı"); return; }
+                      Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/pdf").putExtra(Intent.EXTRA_TITLE, name);
+                      try { a.startActivityForResult(i, MainActivity.REQ_EXPORT); }
+                      catch (Exception e) { a.pendingExport = null; a.js("window.onNativeExport&&window.onNativeExport(false)"); }
+                  });
+              }
           }
           EOF
           cat > $J/Files.java <<'EOF'
