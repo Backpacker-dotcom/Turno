@@ -407,6 +407,48 @@ jobs:
                   }
               }
 
+              void openPdfBytes(final String name, final String b64) {
+                  new Thread(() -> {
+                      byte[] data;
+                      try { data = android.util.Base64.decode(b64, android.util.Base64.DEFAULT); }
+                      catch (Exception e) { toast("PDF oluşturulamadı"); return; }
+                      String fn = name.replaceAll("[\\\\/:*?\"<>|]", "_");
+                      if (!fn.toLowerCase().endsWith(".pdf")) fn += ".pdf";
+                      boolean saved = false;
+                      if (android.os.Build.VERSION.SDK_INT >= 29) {
+                          try {
+                              android.content.ContentResolver cr = getContentResolver();
+                              android.content.ContentValues cv = new android.content.ContentValues();
+                              cv.put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, fn);
+                              cv.put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "application/pdf");
+                              cv.put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS + "/Turno/");
+                              Uri du = cr.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
+                              if (du != null) { try (OutputStream os = cr.openOutputStream(du)) { os.write(data); saved = true; } }
+                          } catch (Exception ignored) { }
+                      }
+                      final Uri u;
+                      try {
+                          File dir = new File(getCacheDir(), "share");
+                          dir.mkdirs();
+                          File f = new File(dir, fn);
+                          try (FileOutputStream fo = new FileOutputStream(f)) { fo.write(data); }
+                          u = Files.uriFor(MainActivity.this, f);
+                      } catch (Exception e) { toast("PDF kaydedilemedi"); return; }
+                      final boolean ok = saved;
+                      runOnUiThread(() -> {
+                          Intent i = new Intent(Intent.ACTION_VIEW);
+                          i.setDataAndType(u, "application/pdf");
+                          i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                          i.setClipData(ClipData.newRawUri("pdf", u));
+                          try { startActivity(i); toast(ok ? "PDF açıldı · İndirilenler/Turno klasörüne de kaydedildi" : "PDF açıldı"); }
+                          catch (Exception e) {
+                              try { startActivity(Intent.createChooser(i, "PDF'i aç")); }
+                              catch (Exception e2) { toast(ok ? "PDF açacak uygulama yok · İndirilenler/Turno klasörüne kaydedildi" : "PDF açacak uygulama bulunamadı"); }
+                          }
+                      });
+                  }).start();
+              }
+
               void sharePdfBytes(final String name, final String b64, final String text) {
                   runOnUiThread(() -> {
                       try {
@@ -564,6 +606,9 @@ jobs:
 
               @JavascriptInterface
               public void sharePdfB64(String name, String b64, String text) { a.sharePdfBytes(name, b64, text); }
+
+              @JavascriptInterface
+              public void openPdfB64(String name, String b64) { a.openPdfBytes(name, b64); }
 
               @JavascriptInterface
               public void printPdfB64(String name, String b64) { a.printPdfBytes(name, b64); }
