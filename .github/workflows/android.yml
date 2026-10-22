@@ -204,6 +204,7 @@ jobs:
           import java.net.URL;
           import java.nio.charset.StandardCharsets;
           import java.util.HashMap;
+          import java.util.Arrays;
 
           public class MainActivity extends Activity {
               static final String HOST = "turno.local";
@@ -231,7 +232,7 @@ jobs:
               protected void onCreate(Bundle savedInstanceState) {
                   super.onCreate(savedInstanceState);
                   web = new WebView(this);
-                  web.setBackgroundColor(0xFF1A1918);
+                  web.setBackgroundColor(0xFFF5EFE6);
                   setContentView(web);
                   WebSettings s = web.getSettings();
                   s.setJavaScriptEnabled(true);
@@ -349,6 +350,32 @@ jobs:
                   });
               }
 
+              void printPdfBytes(final String name, String b64) {
+                  final byte[] data;
+                  try { data = android.util.Base64.decode(b64, android.util.Base64.DEFAULT); }
+                  catch (Exception e) { toast("PDF oluşturulamadı"); return; }
+                  runOnUiThread(() -> {
+                      try {
+                          PrintManager pm = (PrintManager) getSystemService(PRINT_SERVICE);
+                          pm.print(name, new android.print.PrintDocumentAdapter() {
+                              @Override
+                              public void onLayout(PrintAttributes o, PrintAttributes n, android.os.CancellationSignal cs, LayoutResultCallback cb, Bundle extras) {
+                                  if (cs.isCanceled()) { cb.onLayoutCancelled(); return; }
+                                  cb.onLayoutFinished(new android.print.PrintDocumentInfo.Builder(name.endsWith(".pdf") ? name : name + ".pdf")
+                                          .setContentType(android.print.PrintDocumentInfo.CONTENT_TYPE_DOCUMENT).build(), true);
+                              }
+                              @Override
+                              public void onWrite(android.print.PageRange[] pages, android.os.ParcelFileDescriptor dest, android.os.CancellationSignal cs, WriteResultCallback cb) {
+                                  try (FileOutputStream out = new FileOutputStream(dest.getFileDescriptor())) {
+                                      out.write(data);
+                                      cb.onWriteFinished(new android.print.PageRange[]{android.print.PageRange.ALL_PAGES});
+                                  } catch (Exception e) { cb.onWriteFailed(e.getMessage()); }
+                              }
+                          }, a4());
+                      } catch (Exception e) { toast("Yazdırma açılamadı"); }
+                  });
+              }
+
               void sharePdf(final String name, String html, final String text) {
                   withPrintView(html, v -> {
                       try {
@@ -402,7 +429,16 @@ jobs:
                   }
               }
 
-              private void fetchUpdate() {
+              private long lastFetch = 0;
+
+              @Override
+              protected void onResume() {
+                  super.onResume();
+                  if (System.currentTimeMillis() - lastFetch > 60000) new Thread(this::fetchUpdate).start();
+              }
+
+              private synchronized void fetchUpdate() {
+                  lastFetch = System.currentTimeMillis();
                   for (String src : REMOTE) {
                       try {
                           HttpURLConnection c = (HttpURLConnection) new URL(src + "?t=" + System.currentTimeMillis()).openConnection();
@@ -420,12 +456,22 @@ jobs:
                           byte[] data = out.toByteArray();
                           String txt = new String(data, StandardCharsets.UTF_8);
                           if (data.length < 50000 || !txt.contains("<html") || !txt.contains("</script>")) continue;
+                          File cur = new File(getFilesDir(), "index.html");
+                          if (cur.exists() && cur.length() == data.length) {
+                              byte[] old = new byte[(int) cur.length()];
+                              FileInputStream fi = new FileInputStream(cur);
+                              int off = 0, r;
+                              while (off < old.length && (r = fi.read(old, off, old.length - off)) > 0) off += r;
+                              fi.close();
+                              if (Arrays.equals(old, data)) return;
+                          }
                           File tmp = new File(getFilesDir(), "index.tmp");
                           FileOutputStream fo = new FileOutputStream(tmp);
                           fo.write(data);
                           fo.close();
                           File dst = new File(getFilesDir(), "index.html");
                           if (!tmp.renameTo(dst)) { dst.delete(); tmp.renameTo(dst); }
+                          runOnUiThread(() -> { if (web != null) web.reload(); });
                           return;
                       } catch (Exception ignored) { }
                   }
@@ -517,6 +563,9 @@ jobs:
 
               @JavascriptInterface
               public void sharePdfB64(String name, String b64, String text) { a.sharePdfBytes(name, b64, text); }
+
+              @JavascriptInterface
+              public void printPdfB64(String name, String b64) { a.printPdfBytes(name, b64); }
 
               @JavascriptInterface
               public void savePdfB64(final String name, final String b64) {
