@@ -319,6 +319,7 @@ jobs:
                   runOnUiThread(() -> {
                       WebView v = new WebView(MainActivity.this);
                       printView = v;
+                      v.getSettings().setJavaScriptEnabled(false);
                       v.setWebViewClient(new WebViewClient() {
                           boolean done = false;
                           @Override
@@ -335,8 +336,6 @@ jobs:
               PrintAttributes a4() {
                   return new PrintAttributes.Builder()
                           .setMediaSize(PrintAttributes.MediaSize.ISO_A4.asLandscape())
-                          .setResolution(new PrintAttributes.Resolution("pdf", "pdf", 300, 300))
-                          .setColorMode(PrintAttributes.COLOR_MODE_COLOR)
                           .setMinMargins(PrintAttributes.Margins.NO_MARGINS)
                           .build();
               }
@@ -345,8 +344,10 @@ jobs:
                   withPrintView(html, v -> {
                       try {
                           PrintManager pm = (PrintManager) getSystemService(PRINT_SERVICE);
-                          pm.print(name, v.createPrintDocumentAdapter(name), a4());
-                      } catch (Exception e) { toast("Yazdırma açılamadı"); }
+                          if (pm == null) { toast("Yazdırma servisi yok"); return; }
+                          String job = (name == null || name.isEmpty()) ? "Turno-rapor" : name;
+                          pm.print(job, v.createPrintDocumentAdapter(job), a4());
+                      } catch (Exception e) { toast("Yazdırma açılamadı: " + e.getMessage()); }
                   });
               }
 
